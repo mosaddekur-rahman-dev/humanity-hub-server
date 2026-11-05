@@ -11,51 +11,57 @@ app.use(cors());
 app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URI);
+let dbPromise = null;
 
-export async function connectToMongoDB() {
-  try {
-    await client.connect();
-    console.log("You successfully connected to MongoDB!");
-    return client;
-  } catch (err) {
-    console.dir(err);
-    throw err;
+function getDb() {
+  if (!dbPromise) {
+    dbPromise = client
+      .connect()
+      .then(() => {
+        console.log("You successfully connected to MongoDB!");
+        return client.db("humanity-hub");
+      })
+      .catch((err) => {
+        dbPromise = null; // retry on next request
+        throw err;
+      });
   }
+  return dbPromise;
 }
 
+// attach collections to each request
+app.use(async (req, res, next) => {
+  try {
+    const db = await getDb();
+    req.events = db.collection("event");
+    req.joined = db.collection("joined");
+    next();
+  } catch (err) {
+    console.error("DB connection failed:", err);
+    res.status(500).send({ message: "Database unavailable" });
+  }
+});
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+);
+
 const verifyToken = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).send({ msg: "unauthorized" });
-  }
-  const token = authHeader.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).send({ msg: "unauthorized" });
-  }
-
-  const JWKS = createRemoteJWKSet(
-    new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
-  );
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).send({ msg: "unauthorized" });
 
   try {
     const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload;
     next();
   } catch (error) {
-    return res.status(500).send({ msg: "Internal server error" });
+    return res.status(401).send({ msg: "unauthorized" });
   }
 };
 
-const mongoClient = await connectToMongoDB();
-
-const db = mongoClient.db("humanity-hub");
-
-const eventCollection = db.collection("event");
-const joinedCollection = db.collection("joined");
-
 app.post("/add-event", verifyToken, async (req, res) => {
   try {
-    const result = await eventCollection.insertOne(req.body);
+    const result = await req.events.insertOne(req.body);
     res.send(result);
   } catch (err) {
     res
@@ -65,29 +71,24 @@ app.post("/add-event", verifyToken, async (req, res) => {
 });
 
 app.get("/events", async (req, res) => {
-  const result = await eventCollection.find().toArray();
-  res.send(result);
+  res.send(await req.events.find().toArray());
 });
 
 app.get("/events/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
-  if (!ObjectId.isValid(id)) {
+  if (!ObjectId.isValid(id))
     return res.status(400).send({ message: "Invalid id" });
-  }
-  const result = await eventCollection.findOne({ _id: new ObjectId(id) });
+  const result = await req.events.findOne({ _id: new ObjectId(id) });
   if (!result) return res.status(404).send({ message: "Event not found" });
   res.send(result);
 });
 
 app.put("/events/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
-  if (!ObjectId.isValid(id)) {
+  if (!ObjectId.isValid(id))
     return res.status(400).send({ message: "Invalid id" });
-  }
-
   const { _id, email, username, ...updates } = req.body;
-
-  const result = await eventCollection.updateOne(
+  const result = await req.events.updateOne(
     { _id: new ObjectId(id) },
     { $set: updates },
   );
@@ -96,34 +97,29 @@ app.put("/events/:id", verifyToken, async (req, res) => {
 
 app.delete("/events/:id", async (req, res) => {
   const { id } = req.params;
-  if (!ObjectId.isValid(id)) {
+  if (!ObjectId.isValid(id))
     return res.status(400).send({ message: "Invalid id" });
-  }
-  const result = await eventCollection.deleteOne({ _id: new ObjectId(id) });
-  res.send(result);
+  res.send(await req.events.deleteOne({ _id: new ObjectId(id) }));
 });
 
 app.get("/manage/:email", async (req, res) => {
-  const { email } = req.params;
-  const result = await eventCollection.find({ email }).toArray();
-  res.send(result);
+  res.send(await req.events.find({ email: req.params.email }).toArray());
 });
 
 app.post("/joined", async (req, res) => {
-  const result = await joinedCollection.insertOne(req.body);
-  res.send(result);
+  res.send(await req.joined.insertOne(req.body));
 });
 
 app.get("/my-joined/:email", async (req, res) => {
-  const { email } = req.params;
-  const result = await joinedCollection.find({ email }).toArray();
-  res.send(result);
+  res.send(await req.joined.find({ email: req.params.email }).toArray());
 });
 
 app.get("/", (req, res) => {
   res.send({ message: "server is running fine" });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+if (process.env.VERCEL !== "1") {
+  app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+}
+
+export default app;
