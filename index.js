@@ -1,8 +1,8 @@
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
-import { MongoClient, ObjectId } from "mongodb";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { MongoClient, ObjectId } from "mongodb";
 
 const app = express();
 const PORT = 8000;
@@ -53,7 +53,7 @@ const db = mongoClient.db("humanity-hub");
 const eventCollection = db.collection("event");
 const joinedCollection = db.collection("joined");
 
-app.post("/add-event", verifyToken, async (req, res) => {
+app.post("/add-event", async (req, res) => {
   try {
     const result = await eventCollection.insertOne(req.body);
     res.send(result);
