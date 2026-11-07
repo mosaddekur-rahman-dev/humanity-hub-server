@@ -79,7 +79,7 @@ app.get("/events/:id", async (req, res) => {
   res.send(result);
 });
 
-app.put("/events/:id", verifyToken, async (req, res) => {
+app.put("/events/:id", async (req, res) => {
   const { id } = req.params;
   if (!ObjectId.isValid(id)) {
     return res.status(400).send({ message: "Invalid id" });
